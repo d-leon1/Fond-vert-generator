@@ -81,7 +81,7 @@
       box-shadow: 0 0 16px rgba(52, 199, 89, 0.6);
     }
 
-    /* Barre de contrôle flottante inférieure */
+    /* Barre de contrôle flottante inférieure (agrandie) */
     .controls {
       position: absolute;
       bottom: 20px;
@@ -91,14 +91,14 @@
       align-items: center;
       justify-content: center;
       flex-wrap: wrap;
-      gap: 10px;
+      gap: 14px;
       background: rgba(18, 18, 22, 0.85);
       backdrop-filter: blur(16px);
-      padding: 14px 22px;
-      border-radius: 28px;
+      padding: 18px 28px;
+      border-radius: 32px;
       border: 1px solid rgba(255, 255, 255, 0.12);
       z-index: 10;
-      max-width: 95%;
+      max-width: 98%;
       box-shadow: 0 12px 32px rgba(0,0,0,0.5);
     }
 
@@ -110,10 +110,10 @@
       background: rgba(255, 255, 255, 0.12);
       color: #fff;
       border: none;
-      padding: 9px 15px;
-      border-radius: 18px;
+      padding: 10px 18px;
+      border-radius: 20px;
       cursor: pointer;
-      font-size: 13px;
+      font-size: 14px;
       font-weight: 500;
       transition: all 0.2s ease;
       display: flex;
@@ -141,8 +141,8 @@
     input[type="color"] {
       -webkit-appearance: none;
       border: none;
-      width: 30px;
-      height: 30px;
+      width: 32px;
+      height: 32px;
       border-radius: 50%;
       cursor: pointer;
       background: transparent;
@@ -158,7 +158,7 @@
     input[type="range"] {
       accent-color: #007aff;
       cursor: pointer;
-      width: 75px;
+      width: 85px;
     }
 
     .btn-white {
@@ -168,20 +168,34 @@
     }
     .btn-white:hover { background: #e5e5e5; }
 
-    /* Bouton d'ouverture quand la barre est fermée */
+    /* Boutons visibles quand la barre est fermée */
     .btn-open {
       position: absolute;
-      bottom: 20px;
-      right: 20px;
+      bottom: 25px;
+      right: 25px;
       z-index: 20;
       display: none;
     }
 
-    .btn-open.visible {
+    .btn-floating-capture {
+      position: absolute;
+      bottom: 25px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 20;
+      display: none;
+      padding: 14px 28px;
+      font-size: 16px;
+      border-radius: 30px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    }
+
+    .btn-open.visible,
+    .btn-floating-capture.visible {
       display: flex;
     }
 
-    .chroma-only { display: flex; align-items: center; gap: 8px; }
+    .chroma-only { display: flex; align-items: center; gap: 12px; }
 
     video, input[type="file"] { display: none; }
   </style>
@@ -230,7 +244,8 @@
     <button id="captureBtn" class="btn btn-white">📷 Photo</button>
   </div>
 
-  <!-- Bouton pour rouvrir la barre -->
+  <!-- Boutons quand la barre est fermée -->
+  <button id="floatingCaptureBtn" class="btn btn-white btn-floating-capture">📷 Photo</button>
   <button id="openControlsBtn" class="btn btn-mode btn-open">⚙️ Réglages</button>
 
   <script>
@@ -271,6 +286,7 @@
     const chokeInput = document.getElementById('choke');
     const fileInput = document.getElementById('fileInput');
     const captureBtn = document.getElementById('captureBtn');
+    const floatingCaptureBtn = document.getElementById('floatingCaptureBtn');
     const closeControlsBtn = document.getElementById('closeControlsBtn');
     const openControlsBtn = document.getElementById('openControlsBtn');
 
@@ -285,7 +301,7 @@
     let bgTexture = createWebGLTexture();
     let aiMaskTexture = createWebGLTexture();
 
-    let targetYCbCr = [0.587, -0.331, 0.500]; // Valeur YCbCr par défaut pour le vert pur
+    let targetYCbCr = [0.587, -0.331, 0.500];
 
     // Canvas d'appoint MediaPipe
     const aiCanvas = document.createElement('canvas');
@@ -295,11 +311,13 @@
     closeControlsBtn.addEventListener('click', () => {
       controlsBar.classList.add('hidden');
       openControlsBtn.classList.add('visible');
+      floatingCaptureBtn.classList.add('visible');
     });
 
     openControlsBtn.addEventListener('click', () => {
       controlsBar.classList.remove('hidden');
       openControlsBtn.classList.remove('visible');
+      floatingCaptureBtn.classList.remove('visible');
     });
 
     // --- SHADERS WEBGL PRO ---
@@ -315,7 +333,6 @@
       void main() {
         gl_Position = vec4(a_position, 0.0, 1.0);
         
-        // Adaptation du ratio (Object-fit Cover)
         vec2 coord = (a_texCoord - 0.5) * u_texScale + 0.5 + u_texOffset;
 
         if (u_mirror) {
@@ -341,7 +358,6 @@
       uniform float u_softness;
       uniform float u_choke;
 
-      // Conversion RGB [0..1] vers YCbCr
       vec3 rgb2ycbcr(vec3 c) {
         float y  =  0.29900 * c.r + 0.58700 * c.g + 0.11400 * c.b;
         float cb = -0.16874 * c.r - 0.33126 * c.g + 0.50000 * c.b;
@@ -350,7 +366,6 @@
       }
 
       void main() {
-        // Hors limites causées par le recadrage 'cover'
         if (v_texCoord.x < 0.0 || v_texCoord.x > 1.0 || v_texCoord.y < 0.0 || v_texCoord.y > 1.0) {
           gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
           return;
@@ -360,19 +375,12 @@
         float mask = 1.0;
 
         if (u_isIaMode) {
-          // Masque issu du réseau de neurones MediaPipe
           mask = texture2D(u_aiMaskTexture, v_texCoord).a;
         } else {
-          // Chroma Key Pro YCbCr
           vec3 fgYCbCr = rgb2ycbcr(fgColor.rgb);
-          
-          // Distance dans l'espace de chrominance (Cb, Cr uniquement)
           float dist = distance(fgYCbCr.yz, u_targetYCbCr.yz);
-
-          // Masquage avec Seuil + Adoucissement (Feathering)
           mask = smoothstep(u_sensitivity - u_choke, u_sensitivity + u_softness, dist);
 
-          // Spill Suppression Dynamique (Anti-reflets verts)
           float maxOther = max(fgColor.r, fgColor.b);
           if (fgColor.g > maxOther) {
             float spillFactor = 1.0 - mask;
@@ -449,7 +457,6 @@
       return tex;
     }
 
-    // Calculation Object-Fit Cover
     function updateTextureScale() {
       if (!video.videoWidth || !video.videoHeight) return;
 
@@ -492,7 +499,6 @@
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, aiCanvas);
     });
 
-    // Basculer vers Mode IA / Mode Chroma Key
     toggleIaBtn.addEventListener('click', () => {
       isIaMode = !isIaMode;
       toggleIaBtn.classList.toggle('active-ia', isIaMode);
@@ -500,7 +506,6 @@
       chromaControls.style.display = isIaMode ? "none" : "flex";
     });
 
-    // --- CONVERSION RVB vers YCbCr ---
     function hexToYCbCrFloat(hex) {
       const bigint = parseInt(hex.slice(1), 16);
       const r = ((bigint >> 16) & 255) / 255.0;
@@ -518,7 +523,6 @@
       targetYCbCr = hexToYCbCrFloat(e.target.value);
     });
 
-    // Caméra
     async function startCamera() {
       if (video.srcObject) {
         video.srcObject.getTracks().forEach(track => track.stop());
@@ -597,10 +601,8 @@
       canvas.style.cursor = 'default';
     });
 
-    // Boucle de rendu principale
     async function render() {
       if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        // Envoi au modèle IA si actif
         if (isIaMode) {
           await selfieSegmentation.send({ image: video });
         }
@@ -628,12 +630,15 @@
       requestAnimationFrame(render);
     }
 
-    captureBtn.addEventListener('click', () => {
+    function takePhoto() {
       const link = document.createElement('a');
       link.download = `chroma-pro-${Date.now()}.png`;
       link.href = canvas.toDataURL('image/png');
       link.click();
-    });
+    }
+
+    captureBtn.addEventListener('click', takePhoto);
+    floatingCaptureBtn.addEventListener('click', takePhoto);
 
     // Lancement
     startCamera();
