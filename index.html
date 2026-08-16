@@ -102,6 +102,10 @@
       box-shadow: 0 12px 32px rgba(0,0,0,0.5);
     }
 
+    .controls.hidden {
+      display: none;
+    }
+
     .btn {
       background: rgba(255, 255, 255, 0.12);
       color: #fff;
@@ -157,12 +161,25 @@
       width: 75px;
     }
 
-    .btn-capture {
+    .btn-white {
       background: #fff;
       color: #000;
       font-weight: 600;
     }
-    .btn-capture:hover { background: #e5e5e5; }
+    .btn-white:hover { background: #e5e5e5; }
+
+    /* Bouton d'ouverture quand la barre est fermée */
+    .btn-open {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      z-index: 20;
+      display: none;
+    }
+
+    .btn-open.visible {
+      display: flex;
+    }
 
     .chroma-only { display: flex; align-items: center; gap: 8px; }
 
@@ -179,7 +196,7 @@
   <video id="video" autoplay playsinline></video>
   <canvas id="glCanvas"></canvas>
 
-  <div class="controls">
+  <div id="controlsBar" class="controls">
     <button id="switchCamBtn" class="btn">🔄 Caméra</button>
     <button id="mirrorBtn" class="btn active">↔️ Miroir</button>
 
@@ -209,8 +226,12 @@
       </div>
     </div>
 
-    <button id="captureBtn" class="btn btn-capture">📷 Photo</button>
+    <button id="closeControlsBtn" class="btn btn-white">✕ Fermer</button>
+    <button id="captureBtn" class="btn btn-white">📷 Photo</button>
   </div>
+
+  <!-- Bouton pour rouvrir la barre -->
+  <button id="openControlsBtn" class="btn btn-mode btn-open">⚙️ Réglages</button>
 
   <script>
     // --- SERVICE WORKER (PWA & Hors-Ligne) ---
@@ -239,6 +260,7 @@
 
     // Éléments UI
     const toggleIaBtn = document.getElementById('toggleIaBtn');
+    const controlsBar = document.getElementById('controlsBar');
     const chromaControls = document.getElementById('chromaControls');
     const switchCamBtn = document.getElementById('switchCamBtn');
     const mirrorBtn = document.getElementById('mirrorBtn');
@@ -249,6 +271,8 @@
     const chokeInput = document.getElementById('choke');
     const fileInput = document.getElementById('fileInput');
     const captureBtn = document.getElementById('captureBtn');
+    const closeControlsBtn = document.getElementById('closeControlsBtn');
+    const openControlsBtn = document.getElementById('openControlsBtn');
 
     // États
     let isIaMode = false;
@@ -266,6 +290,17 @@
     // Canvas d'appoint MediaPipe
     const aiCanvas = document.createElement('canvas');
     const aiCtx = aiCanvas.getContext('2d');
+
+    // Ouverture / Fermeture du panneau inférieur
+    closeControlsBtn.addEventListener('click', () => {
+      controlsBar.classList.add('hidden');
+      openControlsBtn.classList.add('visible');
+    });
+
+    openControlsBtn.addEventListener('click', () => {
+      controlsBar.classList.remove('hidden');
+      openControlsBtn.classList.remove('visible');
+    });
 
     // --- SHADERS WEBGL PRO ---
 
@@ -562,7 +597,7 @@
       canvas.style.cursor = 'default';
     });
 
-    // Boucle de rendu principae
+    // Boucle de rendu principale
     async function render() {
       if (video.readyState === video.HAVE_ENOUGH_DATA) {
         // Envoi au modèle IA si actif
