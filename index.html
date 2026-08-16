@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chroma Key WebGL Pro & IA</title>
+
+  <!-- Configuration PWA -->
+  <link rel="manifest" href="data:application/manifest+json;utf8,{
+    %22short_name%22:%20%22ChromaStudio%22,
+    %22name%22:%20%22Chroma%20Key%20WebGL%20Pro%20%26%20IA%22,
+    %22icons%22:%20[
+      {%22src%22:%22icon-192.png%22,%22type%22:%22image/png%22,%22sizes%22:%22192x192%22},
+      {%22src%22:%22icon-512.png%22,%22type%22:%22image/png%22,%22sizes%22:%22512x512%22}
+    ],
+    %22start_url%22:%20%22.%22,
+    %22background_color%22:%20%22%23000000%22,
+    %22theme_color%22:%20%22%23000000%22,
+    %22display%22:%20%22standalone%22
+  }">
+  <meta name="theme-color" content="#000000">
+
+  <!-- MediaPipe Selfie Segmentation CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body, html {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background-color: #000;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+
+    #glCanvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+    }
+
+    /* Bouton Mode IA en haut à gauche */
+    .top-left-controls {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 20;
+    }
+
+    .btn-mode {
+      background: rgba(18, 18, 22, 0.85);
+      backdrop-filter: blur(16px);
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      padding: 12px 20px;
+      border-radius: 24px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      transition: all 0.2s ease;
+    }
+
+    .btn-mode:hover {
+      background: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-mode.active-ia {
+      background: #34c759;
+      color: #000;
+      border-color: #34c759;
+      box-shadow: 0 0 16px rgba(52, 199, 89, 0.6);
+    }
+
+    /* Barre de contrôle flottante inférieure */
+    .controls {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      background: rgba(18, 18, 22, 0.85);
+      backdrop-filter: blur(16px);
+      padding: 14px 22px;
+      border-radius: 28px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      z-index: 10;
+      max-width: 95%;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+    }
+
+    .btn {
+      background: rgba(255, 255, 255, 0.12);
+      color: #fff;
+      border: none;
+      padding: 9px 15px;
+      border-radius: 18px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .btn:hover { background: rgba(255, 255, 255, 0.22); }
+    .btn:active { transform: scale(0.96); }
+    .btn.active {
+      background: #007aff;
+      box-shadow: 0 0 12px rgba(0, 122, 255, 0.5);
+    }
+
+    .control-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #fff;
+      font-size: 13px;
+      padding: 0 4px;
+    }
+
+    input[type="color"] {
+      -webkit-appearance: none;
+      border: none;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      cursor: pointer;
+      background: transparent;
+      padding: 0;
+    }
+
+    input[type="color"]::-webkit-color-swatch-wrapper { padding: 0; }
+    input[type="color"]::-webkit-color-swatch {
+      border: 2px solid #fff;
+      border-radius: 50%;
+    }
+
+    input[type="range"] {
+      accent-color: #007aff;
+      cursor: pointer;
+      width: 75px;
+    }
+
+    .btn-capture {
+      background: #fff;
+      color: #000;
+      font-weight: 600;
+    }
+    .btn-capture:hover { background: #e5e5e5; }
+
+    .chroma-only { display: flex; align-items: center; gap: 8px; }
+
+    video, input[type="file"] { display: none; }
+  </style>
+</head>
+<body>
+
+  <!-- Bouton IA Haut Gauche -->
+  <div class="top-left-controls">
+    <button id="toggleIaBtn" class="btn-mode">🤖 Mode IA (Sans fond uni)</button>
+  </div>
+
+  <video id="video" autoplay playsinline></video>
+  <canvas id="glCanvas"></canvas>
+
+  <div class="controls">
+    <button id="switchCamBtn" class="btn">🔄 Caméra</button>
+    <button id="mirrorBtn" class="btn active">↔️ Miroir</button>
+
+    <button class="btn" onclick="document.getElementById('fileInput').click()">🖼️ Fond</button>
+    <input type="file" id="fileInput" accept="image/*">
+
+    <!-- Panneau Chroma Key (Masqué en mode IA) -->
+    <div id="chromaControls" class="chroma-only">
+      <div class="control-group">
+        <button id="pipetteBtn" class="btn">🧪 Pipette</button>
+        <input type="color" id="targetColor" value="#00ff00">
+      </div>
+
+      <div class="control-group">
+        <label for="sensitivity">Seuil</label>
+        <input type="range" id="sensitivity" min="0.02" max="0.4" step="0.005" value="0.15">
+      </div>
+
+      <div class="control-group">
+        <label for="softness">Adoucissement</label>
+        <input type="range" id="softness" min="0.001" max="0.2" step="0.005" value="0.05">
+      </div>
+
+      <div class="control-group">
+        <label for="choke">Rognage</label>
+        <input type="range" id="choke" min="0.0" max="0.02" step="0.001" value="0.003">
+      </div>
+    </div>
+
+    <button id="captureBtn" class="btn btn-capture">📷 Photo</button>
+  </div>
+
+  <script>
+    // --- SERVICE WORKER (PWA & Hors-Ligne) ---
+    if ('serviceWorker' in navigator) {
+      const swCode = `
+        const CACHE_NAME = 'chroma-pro-v1';
+        const ASSETS = [
+          './',
+          'https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js',
+          'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js'
+        ];
+        self.addEventListener('install', e => e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(ASSETS))));
+        self.addEventListener('fetch', e => e.respondWith(caches.match(e.request).then(r => r || fetch(e.request))));
+      `;
+      const blob = new Blob([swCode], { type: 'application/javascript' });
+      navigator.serviceWorker.register(URL.createObjectURL(blob)).catch(() => {});
+    }
+
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('glCanvas');
+    const gl = canvas.getContext('webgl', { preserveDrawingBuffer: true });
+
+    if (!gl) alert("WebGL non pris en charge.");
+
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+
+    // Éléments UI
+    const toggleIaBtn = document.getElementById('toggleIaBtn');
+    const chromaControls = document.getElementById('chromaControls');
+    const switchCamBtn = document.getElementById('switchCamBtn');
+    const mirrorBtn = document.getElementById('mirrorBtn');
+    const pipetteBtn = document.getElementById('pipetteBtn');
+    const targetColorInput = document.getElementById('targetColor');
+    const sensitivityInput = document.getElementById('sensitivity');
+    const softnessInput = document.getElementById('softness');
+    const chokeInput = document.getElementById('choke');
+    const fileInput = document.getElementById('fileInput');
+    const captureBtn = document.getElementById('captureBtn');
+
+    // États
+    let isIaMode = false;
+    let currentFacingMode = 'user';
+    let isMirrored = true;
+    let isPipetteActive = false;
+    let hasBgImage = false;
+
+    let videoTexture = createWebGLTexture();
+    let bgTexture = createWebGLTexture();
+    let aiMaskTexture = createWebGLTexture();
+
+    let targetYCbCr = [0.587, -0.331, 0.500]; // Valeur YCbCr par défaut pour le vert pur
+
+    // Canvas d'appoint MediaPipe
+    const aiCanvas = document.createElement('canvas');
+    const aiCtx = aiCanvas.getContext('2d');
+
+    // --- SHADERS WEBGL PRO ---
+
+    const vsSource = `
+      attribute vec2 a_position;
+      attribute vec2 a_texCoord;
+      varying vec2 v_texCoord;
+      uniform bool u_mirror;
+      uniform vec2 u_texScale;
+      uniform vec2 u_texOffset;
+
+      void main() {
+        gl_Position = vec4(a_position, 0.0, 1.0);
+        
+        // Adaptation du ratio (Object-fit Cover)
+        vec2 coord = (a_texCoord - 0.5) * u_texScale + 0.5 + u_texOffset;
+
+        if (u_mirror) {
+          coord.x = 1.0 - coord.x;
+        }
+        
+        v_texCoord = coord;
+      }
+    `;
+
+    const fsSource = `
+      precision mediump float;
+
+      varying vec2 v_texCoord;
+      uniform sampler2D u_videoTexture;
+      uniform sampler2D u_bgTexture;
+      uniform sampler2D u_aiMaskTexture;
+      
+      uniform bool u_isIaMode;
+      uniform bool u_hasBg;
+      uniform vec3 u_targetYCbCr;
+      uniform float u_sensitivity;
+      uniform float u_softness;
+      uniform float u_choke;
+
+      // Conversion RGB [0..1] vers YCbCr
+      vec3 rgb2ycbcr(vec3 c) {
+        float y  =  0.29900 * c.r + 0.58700 * c.g + 0.11400 * c.b;
+        float cb = -0.16874 * c.r - 0.33126 * c.g + 0.50000 * c.b;
+        float cr =  0.50000 * c.r - 0.41869 * c.g - 0.08131 * c.b;
+        return vec3(y, cb, cr);
+      }
+
+      void main() {
+        // Hors limites causées par le recadrage 'cover'
+        if (v_texCoord.x < 0.0 || v_texCoord.x > 1.0 || v_texCoord.y < 0.0 || v_texCoord.y > 1.0) {
+          gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+          return;
+        }
+
+        vec4 fgColor = texture2D(u_videoTexture, v_texCoord);
+        float mask = 1.0;
+
+        if (u_isIaMode) {
+          // Masque issu du réseau de neurones MediaPipe
+          mask = texture2D(u_aiMaskTexture, v_texCoord).a;
+        } else {
+          // Chroma Key Pro YCbCr
+          vec3 fgYCbCr = rgb2ycbcr(fgColor.rgb);
+          
+          // Distance dans l'espace de chrominance (Cb, Cr uniquement)
+          float dist = distance(fgYCbCr.yz, u_targetYCbCr.yz);
+
+          // Masquage avec Seuil + Adoucissement (Feathering)
+          mask = smoothstep(u_sensitivity - u_choke, u_sensitivity + u_softness, dist);
+
+          // Spill Suppression Dynamique (Anti-reflets verts)
+          float maxOther = max(fgColor.r, fgColor.b);
+          if (fgColor.g > maxOther) {
+            float spillFactor = 1.0 - mask;
+            fgColor.g = mix(fgColor.g, maxOther, spillFactor);
+          }
+        }
+
+        if (u_hasBg) {
+          vec4 bgColor = texture2D(u_bgTexture, v_texCoord);
+          gl_FragColor = vec4(mix(bgColor.rgb, fgColor.rgb, mask), 1.0);
+        } else {
+          gl_FragColor = vec4(fgColor.rgb * mask, mask);
+        }
+      }
+    `;
+
+    function createShader(gl, type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(shader));
+        gl.deleteShader(shader);
+        return null;
+      }
+      return shader;
+    }
+
+    const program = gl.createProgram();
+    gl.attachShader(program, createShader(gl, gl.VERTEX_SHADER, vsSource));
+    gl.attachShader(program, createShader(gl, gl.FRAGMENT_SHADER, fsSource));
+    gl.linkProgram(program);
+    gl.useProgram(program);
+
+    // Buffers
+    const positionBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
+
+    const positionLoc = gl.getAttribLocation(program, "a_position");
+    gl.enableVertexAttribArray(positionLoc);
+    gl.vertexAttribPointer(positionLoc, 2, gl.FLOAT, false, 0, 0);
+
+    const texCoordBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, texCoordBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0,0, 1,0, 0,1, 0,1, 1,0, 1,1]), gl.STATIC_DRAW);
+
+    const texCoordLoc = gl.getAttribLocation(program, "a_texCoord");
+    gl.enableVertexAttribArray(texCoordLoc);
+    gl.vertexAttribPointer(texCoordLoc, 2, gl.FLOAT, false, 0, 0);
+
+    // Uniforms
+    const uMirrorLoc = gl.getUniformLocation(program, "u_mirror");
+    const uTexScaleLoc = gl.getUniformLocation(program, "u_texScale");
+    const uTexOffsetLoc = gl.getUniformLocation(program, "u_texOffset");
+    const uIsIaModeLoc = gl.getUniformLocation(program, "u_isIaMode");
+    const uHasBgLoc = gl.getUniformLocation(program, "u_hasBg");
+    const uTargetYCbCrLoc = gl.getUniformLocation(program, "u_targetYCbCr");
+    const uSensitivityLoc = gl.getUniformLocation(program, "u_sensitivity");
+    const uSoftnessLoc = gl.getUniformLocation(program, "u_softness");
+    const uChokeLoc = gl.getUniformLocation(program, "u_choke");
+
+    const uVideoTexLoc = gl.getUniformLocation(program, "u_videoTexture");
+    const uBgTexLoc = gl.getUniformLocation(program, "u_bgTexture");
+    const uAiMaskTexLoc = gl.getUniformLocation(program, "u_aiMaskTexture");
+
+    function createWebGLTexture() {
+      const tex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      return tex;
+    }
+
+    // Calculation Object-Fit Cover
+    function updateTextureScale() {
+      if (!video.videoWidth || !video.videoHeight) return;
+
+      const canvasAspect = window.innerWidth / window.innerHeight;
+      const videoAspect = video.videoWidth / video.videoHeight;
+
+      let scaleX = 1.0, scaleY = 1.0;
+      if (canvasAspect > videoAspect) {
+        scaleY = videoAspect / canvasAspect;
+      } else {
+        scaleX = canvasAspect / videoAspect;
+      }
+
+      gl.uniform2f(uTexScaleLoc, scaleX, scaleY);
+      gl.uniform2f(uTexOffsetLoc, 0.0, 0.0);
+    }
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+      gl.viewport(0, 0, canvas.width, canvas.height);
+      updateTextureScale();
+    }
+    window.addEventListener('resize', resizeCanvas);
+
+    // --- CONFIGURATION MEDIAPIPE (IA) ---
+    const selfieSegmentation = new SelfieSegmentation({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`
+    });
+
+    selfieSegmentation.setOptions({ modelSelection: 1 });
+    selfieSegmentation.onResults((results) => {
+      aiCanvas.width = results.segmentationMask.width;
+      aiCanvas.height = results.segmentationMask.height;
+      aiCtx.clearRect(0, 0, aiCanvas.width, aiCanvas.height);
+      aiCtx.drawImage(results.segmentationMask, 0, 0);
+
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, aiMaskTexture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, aiCanvas);
+    });
+
+    // Basculer vers Mode IA / Mode Chroma Key
+    toggleIaBtn.addEventListener('click', () => {
+      isIaMode = !isIaMode;
+      toggleIaBtn.classList.toggle('active-ia', isIaMode);
+      toggleIaBtn.textContent = isIaMode ? "🤖 Mode IA (Actif)" : "🤖 Mode IA (Sans fond uni)";
+      chromaControls.style.display = isIaMode ? "none" : "flex";
+    });
+
+    // --- CONVERSION RVB vers YCbCr ---
+    function hexToYCbCrFloat(hex) {
+      const bigint = parseInt(hex.slice(1), 16);
+      const r = ((bigint >> 16) & 255) / 255.0;
+      const g = ((bigint >> 8) & 255) / 255.0;
+      const b = (bigint & 255) / 255.0;
+
+      const y  =  0.29900 * r + 0.58700 * g + 0.11400 * b;
+      const cb = -0.16874 * r - 0.33126 * g + 0.50000 * b;
+      const cr =  0.50000 * r - 0.41869 * g - 0.08131 * b;
+
+      return [y, cb, cr];
+    }
+
+    targetColorInput.addEventListener('input', (e) => {
+      targetYCbCr = hexToYCbCrFloat(e.target.value);
+    });
+
+    // Caméra
+    async function startCamera() {
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach(track => track.stop());
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: currentFacingMode },
+          audio: false
+        });
+        video.srcObject = stream;
+        await video.play();
+        resizeCanvas();
+      } catch (err) {
+        alert("Erreur d'accès caméra : " + err.message);
+      }
+    }
+
+    switchCamBtn.addEventListener('click', () => {
+      currentFacingMode = (currentFacingMode === 'user') ? 'environment' : 'user';
+      isMirrored = (currentFacingMode === 'user');
+      mirrorBtn.classList.toggle('active', isMirrored);
+      startCamera();
+    });
+
+    mirrorBtn.addEventListener('click', () => {
+      isMirrored = !isMirrored;
+      mirrorBtn.classList.toggle('active', isMirrored);
+    });
+
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const img = new Image();
+        img.onload = () => {
+          gl.activeTexture(gl.TEXTURE1);
+          gl.bindTexture(gl.TEXTURE_2D, bgTexture);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+          hasBgImage = true;
+        };
+        img.src = URL.createObjectURL(file);
+      }
+    });
+
+    pipetteBtn.addEventListener('click', async () => {
+      if ('EyeDropper' in window) {
+        try {
+          const eyeDropper = new EyeDropper();
+          const result = await eyeDropper.open();
+          targetColorInput.value = result.sRGBHex;
+          targetYCbCr = hexToYCbCrFloat(result.sRGBHex);
+        } catch (e) {}
+      } else {
+        isPipetteActive = !isPipetteActive;
+        pipetteBtn.classList.toggle('active', isPipetteActive);
+        canvas.style.cursor = isPipetteActive ? 'crosshair' : 'default';
+      }
+    });
+
+    canvas.addEventListener('click', (e) => {
+      if (!isPipetteActive) return;
+
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = rect.height - (e.clientY - rect.top);
+
+      const pixels = new Uint8Array(4);
+      gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+
+      const hex = "#" + ((1 << 24) + (pixels[0] << 16) + (pixels[1] << 8) + pixels[2]).toString(16).slice(1);
+      targetColorInput.value = hex;
+      targetYCbCr = hexToYCbCrFloat(hex);
+
+      isPipetteActive = false;
+      pipetteBtn.classList.remove('active');
+      canvas.style.cursor = 'default';
+    });
+
+    // Boucle de rendu principae
+    async function render() {
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        // Envoi au modèle IA si actif
+        if (isIaMode) {
+          await selfieSegmentation.send({ image: video });
+        }
+
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, videoTexture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+
+        gl.uniform1i(uVideoTexLoc, 0);
+        gl.uniform1i(uBgTexLoc, 1);
+        gl.uniform1i(uAiMaskTexLoc, 2);
+
+        gl.uniform1i(uMirrorLoc, isMirrored);
+        gl.uniform1i(uIsIaModeLoc, isIaMode);
+        gl.uniform1i(uHasBgLoc, hasBgImage);
+
+        gl.uniform3fv(uTargetYCbCrLoc, targetYCbCr);
+        gl.uniform1f(uSensitivityLoc, parseFloat(sensitivityInput.value));
+        gl.uniform1f(uSoftnessLoc, parseFloat(softnessInput.value));
+        gl.uniform1f(uChokeLoc, parseFloat(chokeInput.value));
+
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      }
+
+      requestAnimationFrame(render);
+    }
+
+    captureBtn.addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = `chroma-pro-${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    });
+
+    // Lancement
+    startCamera();
+    requestAnimationFrame(render);
+  </script>
+</body>
+</html>
